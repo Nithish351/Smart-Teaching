@@ -1,0 +1,516 @@
+import { useState } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { BookOpen, LogOut, Lock } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+
+type View = 'login' | 'dashboard' | 'join';
+
+interface JoinedClass {
+  teacherId: string;
+  teacherEmail: string;
+  classCode: string;
+  joinedAt: string;
+}
+
+interface StudentDashboardProps {
+  onLogout?: () => void;
+}
+
+export const StudentDashboard = ({ onLogout }: StudentDashboardProps) => {
+  const [currentView, setCurrentView] = useState<View>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [classCode, setClassCode] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [studentData, setStudentData] = useState<{ email: string; studentId: string; teacherId?: string; classCode?: string } | null>(null);
+  const [joinedClasses, setJoinedClasses] = useState<JoinedClass[]>([]);
+  const [error, setError] = useState('');
+  const { toast } = useToast();
+
+  const buildJoinedClassesFromStudent = async (student: { teacherId?: string; classCode?: string }) => {
+    if (!student.teacherId || !student.classCode) return [] as JoinedClass[];
+    try {
+      const resp = await fetch(`/api/teacher/${student.teacherId}`);
+      const t = await resp.json();
+      if (!resp.ok) return [] as JoinedClass[];
+      return [{
+        teacherId: student.teacherId,
+        teacherEmail: t.teacher?.email || 'Unknown',
+        classCode: student.classCode,
+        joinedAt: new Date().toISOString(),
+      }];
+    } catch {
+      return [] as JoinedClass[];
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/auth/student/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Login failed');
+
+      const s = data.student || {};
+      setStudentData({ email: s.email, studentId: s.studentId, teacherId: s.teacherId, classCode: s.classCode });
+      const joined = await buildJoinedClassesFromStudent(s);
+      setJoinedClasses(joined);
+      setCurrentView('dashboard');
+      setEmail('');
+      setPassword('');
+      toast({ title: 'Welcome!', description: `Logged in as ${s.email}` });
+    } catch (err) {
+      const errorMsg = (err as { message?: string })?.message || 'Login failed';
+      setError(errorMsg);
+      toast({ title: 'Login Failed', description: errorMsg, variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!classCode || classCode.length !== 4) {
+      setError('Please enter a valid 4-digit class code');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      // Lookup teacher by class code first
+      const lookup = await fetch(`/api/auth/teacher/by-classcode/${encodeURIComponent(classCode)}`);
+      const lookupData = await lookup.json();
+      if (!lookup.ok) throw new Error(lookupData.error || 'Invalid class code');
+
+      const teacherId = lookupData.teacher?.teacherId;
+      const teacherEmail = lookupData.teacher?.email;
+      if (!teacherId) throw new Error('Teacher not found for this code');
+
+      const response = await fetch('/api/auth/student/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, classCode, teacherId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Registration failed');
+
+      const s = data.student || {};
+      setStudentData({ email: s.email, studentId: s.studentId, teacherId, classCode });
+      setJoinedClasses([{
+        teacherId,
+        teacherEmail: teacherEmail || 'Unknown',
+        classCode,
+        joinedAt: new Date().toISOString(),
+      }]);
+      setCurrentView('dashboard');
+      setEmail('');
+      setPassword('');
+      setClassCode('');
+      toast({ title: 'Registration Successful!', description: `Welcome, ${s.email || email}!` });
+    } catch (err) {
+      const errorMsg = (err as { message?: string })?.message || 'Registration failed';
+      setError(errorMsg);
+      toast({ title: 'Registration Failed', description: errorMsg, variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentView('login');
+    setStudentData(null);
+    setJoinedClasses([]);
+    setEmail('');
+    setPassword('');
+    setClassCode('');
+    setError('');
+    onLogout?.();
+  };
+
+  if (currentView === 'login') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+        <div className="max-w-md mx-auto mt-20">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Student Portal</h1>
+            <p className="text-gray-600">Sign in with your credentials and class code</p>
+          </div>
+          <Card className="shadow-lg">
+            <CardHeader>
+              <CardTitle>Student Login</CardTitle>
+              <CardDescription>Enter your email, password, and class code to access your classes</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleRegister} className="space-y-4">
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input 
+                    id="email" 
+                    type="email" 
+                    placeholder="student@example.com" 
+                    value={email} 
+                    onChange={(e) => setEmail(e.target.value)} 
+                    required 
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input 
+                    id="password" 
+                    type="password" 
+                    placeholder="••••••••" 
+                    value={password} 
+                    onChange={(e) => setPassword(e.target.value)} 
+                    required 
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="class-code" className="flex items-center gap-2">
+                    <Lock className="w-4 h-4" /> 4-Digit Class Code
+                  </Label>
+                  <Input 
+                    id="class-code" 
+                    type="text" 
+                    placeholder="XXXX" 
+                    value={classCode} 
+                    onChange={(e) => setClassCode(e.target.value.toUpperCase())} 
+                    maxLength={4} 
+                    required 
+                  />
+                </div>
+                <Button 
+                  type="submit" 
+                  disabled={isLoading} 
+                  className="w-full bg-purple-600 hover:bg-purple-700"
+                >
+                  {isLoading ? 'Signing in...' : 'Sign In'}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-4xl font-bold text-gray-900">Student Dashboard</h1>
+            <p className="text-gray-600 mt-1">Welcome, {studentData?.email}</p>
+          </div>
+          <Button onClick={handleLogout} variant="outline" className="flex items-center gap-2">
+            <LogOut className="w-4 h-4" /> Logout
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {joinedClasses.length === 0 ? (
+            <div className="col-span-full">
+              <Card className="shadow-lg text-center py-12">
+                <BookOpen className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-600 text-lg">You haven't joined any classes yet.</p>
+                <p className="text-gray-500 mt-2">Ask your teacher for a 4-digit class code to join.</p>
+                <Button onClick={handleLogout} className="mt-6 bg-purple-600 hover:bg-purple-700">Logout & Register Again</Button>
+              </Card>
+            </div>
+          ) : (
+            joinedClasses.map((cls, index) => (
+              <Card key={index} className="shadow-lg hover:shadow-xl transition-shadow">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BookOpen className="w-5 h-5" /> Teacher's Class
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="text-sm text-gray-600">Teacher Email</p>
+                    <p className="text-lg font-medium">{cls.teacherEmail}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Class Code</p>
+                    <p className="text-xl font-bold text-purple-600 tracking-widest">{cls.classCode}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Joined On</p>
+                    <p className="text-sm">{new Date(cls.joinedAt).toLocaleDateString()}</p>
+                  </div>
+                  <div className="pt-4 border-t">
+                    <p className="text-sm text-gray-600 mb-3">Features Coming Soon:</p>
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-700">📚 View Study Materials</p>
+                      <p className="text-sm text-gray-700">📝 Take Quizzes</p>
+                      <p className="text-sm text-gray-700">📊 Track Progress</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default StudentDashboard;
+
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { BookOpen, LogOut, Lock } from 'lucide-react';
+import { useState } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { BookOpen, LogOut, Lock } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+
+type View = 'login' | 'dashboard' | 'join';
+
+interface JoinedClass {
+  teacherId: string;
+  teacherEmail: string;
+  classCode: string;
+  joinedAt: string;
+}
+
+interface StudentDashboardProps {
+  onLogout?: () => void;
+}
+
+export const StudentDashboard = ({ onLogout }: StudentDashboardProps) => {
+  const [currentView, setCurrentView] = useState<View>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [classCode, setClassCode] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [studentData, setStudentData] = useState<{ email: string; studentId: string } | null>(null);
+  const [joinedClasses, setJoinedClasses] = useState<JoinedClass[]>([]);
+  const [error, setError] = useState('');
+  const { toast } = useToast();
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/auth/student/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+  const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Login failed');
+
+      setStudentData({ email: data.email, studentId: data.studentId });
+      setJoinedClasses(data.joinedClasses || []);
+      setCurrentView('dashboard');
+      setEmail('');
+      setPassword('');
+      toast({ title: 'Welcome!', description: `Logged in as ${data.email}` });
+    } catch (err) {
+      const errorMsg = (err as { message?: string })?.message || 'Login failed';
+      setError(errorMsg);
+      toast({ title: 'Login Failed', description: errorMsg, variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!classCode || classCode.length !== 4) {
+      setError('Please enter a valid 4-digit class code');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/auth/student/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, classCode }),
+      });
+  const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Registration failed');
+
+      setStudentData({ email: data.email, studentId: data.studentId });
+      setJoinedClasses(data.joinedClasses || []);
+      setCurrentView('dashboard');
+      setEmail('');
+      setPassword('');
+      setClassCode('');
+      toast({ title: 'Registration Successful!', description: `Welcome, ${data.email}!` });
+    } catch (err) {
+      const errorMsg = (err as { message?: string })?.message || 'Registration failed';
+      setError(errorMsg);
+      toast({ title: 'Registration Failed', description: errorMsg, variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentView('login');
+    setStudentData(null);
+    setJoinedClasses([]);
+    setEmail('');
+    setPassword('');
+    setClassCode('');
+    setError('');
+    onLogout?.();
+  };
+
+  if (currentView === 'login') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+        <div className="max-w-md mx-auto mt-20">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Student Portal</h1>
+            <p className="text-gray-600">Login or register to access your classes</p>
+          </div>
+          <div className="space-y-4">
+            <Card className="shadow-lg">
+              <CardHeader>
+                <CardTitle>Login</CardTitle>
+                <CardDescription>Sign in with your credentials</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleLogin} className="space-y-4">
+                  {error && currentView === 'login' && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  )}
+                  <div className="space-y-2">
+                    <Label htmlFor="login-email">Email</Label>
+                    <Input id="login-email" type="email" placeholder="student@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="login-password">Password</Label>
+                    <Input id="login-password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                  </div>
+                  <Button type="submit" disabled={isLoading} className="w-full">{isLoading ? 'Logging in...' : 'Login'}</Button>
+                </form>
+              </CardContent>
+            </Card>
+            <Card className="shadow-lg">
+              <CardHeader>
+                <CardTitle>New Here?</CardTitle>
+                <CardDescription>Register with a class code from your teacher</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleRegister} className="space-y-4">
+                  {error && currentView === 'join' && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  )}
+                  <div className="space-y-2">
+                    <Label htmlFor="reg-email">Email</Label>
+                    <Input id="reg-email" type="email" placeholder="student@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reg-password">Password</Label>
+                    <Input id="reg-password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="class-code" className="flex items-center gap-2">
+                      <Lock className="w-4 h-4" /> 4-Digit Class Code
+                    </Label>
+                    <Input id="class-code" type="text" placeholder="XXXX" value={classCode} onChange={(e) => setClassCode(e.target.value.toUpperCase())} maxLength={4} required />
+                  </div>
+                  <Button type="submit" disabled={isLoading} onClick={() => setCurrentView('join')} className="w-full bg-purple-600 hover:bg-purple-700">{isLoading ? 'Registering...' : 'Register'}</Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-4xl font-bold text-gray-900">Student Dashboard</h1>
+            <p className="text-gray-600 mt-1">Welcome, {studentData?.email}</p>
+          </div>
+          <Button onClick={handleLogout} variant="outline" className="flex items-center gap-2">
+            <LogOut className="w-4 h-4" /> Logout
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {joinedClasses.length === 0 ? (
+            <div className="col-span-full">
+              <Card className="shadow-lg text-center py-12">
+                <BookOpen className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-600 text-lg">You haven't joined any classes yet.</p>
+                <p className="text-gray-500 mt-2">Ask your teacher for a 4-digit class code to join.</p>
+                <Button onClick={handleLogout} className="mt-6 bg-purple-600 hover:bg-purple-700">Logout & Register Again</Button>
+              </Card>
+            </div>
+          ) : (
+            joinedClasses.map((cls, index) => (
+              <Card key={index} className="shadow-lg hover:shadow-xl transition-shadow">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <BookOpen className="w-5 h-5" /> Teacher's Class
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="text-sm text-gray-600">Teacher Email</p>
+                    <p className="text-lg font-medium">{cls.teacherEmail}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Class Code</p>
+                    <p className="text-xl font-bold text-purple-600 tracking-widest">{cls.classCode}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Joined On</p>
+                    <p className="text-sm">{new Date(cls.joinedAt).toLocaleDateString()}</p>
+                  </div>
+                  <div className="pt-4 border-t">
+                    <p className="text-sm text-gray-600 mb-3">Features Coming Soon:</p>
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-700">📚 View Study Materials</p>
+                      <p className="text-sm text-gray-700">📝 Take Quizzes</p>
+                      <p className="text-sm text-gray-700">📊 Track Progress</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+*/
